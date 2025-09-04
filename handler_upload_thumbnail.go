@@ -1,10 +1,10 @@
 package main
 
 import (
-	"encoding/base64"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
 	"github.com/google/uuid"
@@ -32,7 +32,6 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 
 	fmt.Println("uploading thumbnail for video", videoID, "by user", userID)
 
-	// TODO: implement the upload here
 	const maxMemory = 10 << 20 // 10 MB
 	r.ParseMultipartForm(maxMemory)
 
@@ -48,12 +47,6 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	imageData, err := io.ReadAll(file)
-	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Error reading the file", err)
-		return
-	}
-
 	videoMetaData, err := cfg.db.GetVideo(videoID)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Error getting video", err)
@@ -65,10 +58,26 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	base64Encoded := base64.StdEncoding.EncodeToString(imageData)
-	base64DataURL := fmt.Sprintf("data:image/png;base64,%v", base64Encoded)
+	if err := cfg.ensureAssetDir(); err != nil {
+		respondWithError(w, http.StatusInternalServerError, "couldn't assert asset directory", err)
+		return
+	}
+	assetPath := getAssetPath(videoID, mediaType)
+	assetDiskPath := cfg.getAssetDiskPath(assetPath)
 
-	videoMetaData.ThumbnailURL = &base64DataURL
+	dst, err := os.Create(assetDiskPath)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "couldnt'create file on server disk", err)
+		return
+	}
+	defer dst.Close()
+	if _, err := io.Copy(dst, file); err != nil {
+		respondWithError(w, http.StatusInternalServerError, "couldnt'write file to server disk", err)
+		return
+	}
+
+	url := cfg.getAssetURL(assetPath)
+	videoMetaData.ThumbnailURL = &url
 
 	if err := cfg.db.UpdateVideo(videoMetaData); err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Error updating video metadata", err)
